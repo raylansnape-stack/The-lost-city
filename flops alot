@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Rebuild the Lost City</title>
+<style>
+body {margin:0; overflow:hidden; font-family:Arial;}
+#ui{
+position:absolute;
+top:10px;
+left:10px;
+color:white;
+background:rgba(0,0,0,0.4);
+padding:10px;
+}
+</style>
+</head>
+<body>
+
+<div id="ui">
+WASD move | Double W sprint | Space jump<br>
+Click mine/chop | B build wall | N build beam | R build roof | H tame horse
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+<script>
+let scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+
+let camera = new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.1,1000);
+let renderer = new THREE.WebGLRenderer();
+renderer.setSize(innerWidth,innerHeight);
+document.body.appendChild(renderer.domElement);
+
+let light = new THREE.DirectionalLight(0xffffff,1);
+light.position.set(50,100,50);
+scene.add(light);
+
+let ambient = new THREE.AmbientLight(0x888888);
+scene.add(ambient);
+
+let player = new THREE.Object3D();
+player.position.set(0,5,0);
+scene.add(player);
+
+camera.position.set(0,2,0);
+player.add(camera);
+
+// Terrain
+let terrainGeo = new THREE.PlaneGeometry(500,500,100,100);
+terrainGeo.vertices?.forEach(v => v.z = Math.random()*2);
+let terrainMat = new THREE.MeshLambertMaterial({color:0x4c9a2a});
+let terrain = new THREE.Mesh(terrainGeo,terrainMat);
+terrain.rotation.x = -Math.PI/2;
+scene.add(terrain);
+
+// Objects
+let trees=[], rocks=[], buildings=[], horses=[];
+
+// Create Trees, Rocks, Horses
+function createTree(x,z){
+    let trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,5), new THREE.MeshLambertMaterial({color:0x8b5a2b}));
+    trunk.position.set(x,2.5,z);
+    scene.add(trunk);
+    trees.push(trunk);
+    let leaves = new THREE.Mesh(new THREE.SphereGeometry(3), new THREE.MeshLambertMaterial({color:0x228b22}));
+    leaves.position.set(x,6,z);
+    scene.add(leaves);
+}
+function createRock(x,z){
+    let rock = new THREE.Mesh(new THREE.DodecahedronGeometry(2), new THREE.MeshLambertMaterial({color:0x777777}));
+    rock.position.set(x,2,z);
+    scene.add(rock);
+    rocks.push(rock);
+}
+function createHorse(x,z){
+    let horse = new THREE.Mesh(new THREE.BoxGeometry(3,2,1), new THREE.MeshLambertMaterial({color:0x5a3d2b}));
+    horse.position.set(x,1,z);
+    horse.userData = {speed:5+Math.random()*5, stamina:5+Math.random()*5, tamed:false};
+    scene.add(horse);
+    horses.push(horse);
+}
+
+// Populate world
+for(let i=0;i<80;i++) createTree(Math.random()*400-200,Math.random()*400-200);
+for(let i=0;i<40;i++) createRock(Math.random()*400-200,Math.random()*400-200);
+for(let i=0;i<10;i++) createHorse(Math.random()*200-100,Math.random()*200-100);
+
+// Player movement
+let keys={};
+document.addEventListener("keydown",e => keys[e.key.toLowerCase()]=true);
+document.addEventListener("keyup",e => keys[e.key.toLowerCase()]=false);
+
+// Mining
+document.addEventListener("click", mine);
+function mine(){
+    let ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(0,0), camera);
+    let hit = ray.intersectObjects([...trees,...rocks]);
+    if(hit.length>0){
+        scene.remove(hit[0].object);
+    }
+}
+
+// Tame horses
+document.addEventListener("keydown", e => {if(e.key==="h") tameHorse();});
+function tameHorse(){
+    let ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(0,0), camera);
+    let hit = ray.intersectObjects(horses);
+    if(hit.length>0){
+        let horse = hit[0].object;
+        horse.userData.tamed=true;
+        console.log("Horse tamed speed:",horse.userData.speed);
+    }
+}
+
+// Get highest support for stacking
+function getHighestSupport(x, z){
+    let maxY = 0;
+    buildings.forEach(obj=>{
+        let dx = Math.abs(obj.position.x - x);
+        let dz = Math.abs(obj.position.z - z);
+        if(dx<2.5 && dz<2.5){
+            let topY = obj.position.y + (obj.userData.type==='wall'?3:0.5);
+            if(topY>maxY) maxY=topY;
+        }
+    });
+    return maxY;
+}
+
+// Check safe placement
+function isPlacementSafe(type,x,z){
+    let topY = getHighestSupport(x,z);
+    let weight = type==='wall'?2:type==='beam'?1:3;
+    let support=0;
+    buildings.forEach(obj=>{
+        let dx = Math.abs(obj.position.x - x);
+        let dz = Math.abs(obj.position.z - z);
+        let dy = obj.position.y - topY;
+        if(dy<0 && dx<2.5 && dz<2.5) support+=obj.userData.weight||1;
+    });
+    return support>=weight;
+}
+
+// Ghost preview
+let previewMesh=null, previewType='wall';
+function updatePreview(){
+    if(previewMesh) scene.remove(previewMesh);
+    let geo, mat=new THREE.MeshLambertMaterial({transparent:true,opacity:0.5});
+    let topY = getHighestSupport(player.position.x, player.position.z);
+    let safe = isPlacementSafe(previewType, player.position.x, player.position.z);
+    mat.color.set(safe?0xffffff:0xff0000);
+    if(previewType==='wall'){ geo=new THREE.BoxGeometry(4,3,0.5); previewMesh=new THREE.Mesh(geo,mat); previewMesh.position.set(player.position.x, topY+1.5, player.position.z-5);}
+    else if(previewType==='beam'){ geo=new THREE.BoxGeometry(4,0.5,0.5); previewMesh=new THREE.Mesh(geo,mat); previewMesh.position.set(player.position.x, topY+0.25, player.position.z-5);}
+    else if(previewType==='roof'){ geo=new THREE.BoxGeometry(4,0.5,4); previewMesh=new THREE.Mesh(geo,mat); previewMesh.position.set(player.position.x, topY+0.25, player.position.z-5);}
+    scene.add(previewMesh);
+}
+
+// Build functions
+function buildWall(){ if(!isPlacementSafe('wall',player.position.x,player.position.z)) return; let geo=new THREE.BoxGeometry(4,3,0.5); let mat=new THREE.MeshLambertMaterial({color:0xc2b280}); let wall=new THREE.Mesh(geo,mat); let topY=getHighestSupport(player.position.x,player.position.z); wall.position.set(player.position.x,topY+1.5,player.position.z-5); wall.userData={type:'wall',weight:2,support:0}; scene.add(wall); buildings.push(wall);}
+function buildBeam(){ if(!isPlacementSafe('beam',player.position.x,player.position.z)) return; let geo=new THREE.BoxGeometry(4,0.5,0.5); let mat=new THREE.MeshLambertMaterial({color:0xaaaaaa}); let beam=new THREE.Mesh(geo,mat); let topY=getHighestSupport(player.position.x,player.position.z); beam.position.set(player.position.x,topY+0.25,player.position.z-5); beam.userData={type:'beam',weight:1,support:0}; scene.add(beam); buildings.push(beam);}
+function buildRoof(){ if(!isPlacementSafe('roof',player.position.x,player.position.z)) return; let geo=new THREE.BoxGeometry(4,0.5,4); let mat=new THREE.MeshLambertMaterial({color:0x999966}); let roof=new THREE.Mesh(geo,mat); let topY=getHighestSupport(player.position.x,player.position.z); roof.position.set(player.position.x,topY+0.25,player.position.z-5); roof.userData={type:'roof',weight:3,support:0}; scene.add(roof); buildings.push(roof);}
+
+// Switch preview type
+document.addEventListener("keydown", e=>{
+    if(e.key==='b'){ previewType='wall'; buildWall(); }
+    if(e.key==='n'){ previewType='beam'; buildBeam(); }
+    if(e.key==='r'){ previewType='roof'; buildRoof(); }
+});
+
+// Collapse physics
+function collapsePhysics(){
+    buildings.forEach(obj=>{
+        obj.userData.support=0;
+        buildings.forEach(other=>{
+            if(obj===
